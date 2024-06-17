@@ -1,3 +1,6 @@
+namespace SpriteKind {
+    export const Effect = SpriteKind.create()
+}
 function make_timer_bar (mining_time: number) {
     bar = statusbars.create(20, 4, StatusBarKind.Energy)
     bar.attachToSprite(me)
@@ -16,6 +19,12 @@ scene.onOverlapTile(SpriteKind.Player, myTiles.tile11, function (me, entrance) {
     me.y += -16
     generate_cave()
 })
+function level_up () {
+    mining_level += 1
+    xp_bar.setLabel(convertToText(mining_level), 3)
+    xp_bar.max = mining_level * 1000
+    xp_bar.value = 0
+}
 controller.B.onEvent(ControllerButtonEvent.Pressed, function () {
     if (dynamite_count > 0) {
         dynamite_count += -1
@@ -38,6 +47,12 @@ controller.B.onEvent(ControllerButtonEvent.Pressed, function () {
         }
     }
 })
+function reduce_mining_time () {
+    for (let value of Dictionary.get_keys_list(mine_time)) {
+        new_time = Dictionary.get_value(mine_time, value) * 0.75
+        Dictionary.replaceValue(mine_time, value, new_time)
+    }
+}
 controller.A.onEvent(ControllerButtonEvent.Pressed, function () {
     location = get_direction()
     if (metal_tiles.indexOf(tiles.tileImageAtLocation(location)) >= 0 || tiles.tileAtLocationEquals(location, myTiles.tile10)) {
@@ -52,6 +67,14 @@ function set_capacity_display () {
 scene.onOverlapTile(SpriteKind.Player, myTiles.tile14, function (sprite, location) {
     game.over(true)
 })
+function destroy_block (col: number, row: number, mine_time: number) {
+    location = tiles.getTileLocation(col, row)
+    block = sprites.create(tiles.tileImageAtLocation(location), SpriteKind.Effect)
+    tiles.placeOnTile(block, location)
+    sprites.destroy(block, effects.disintegrate, mine_time)
+    scene.cameraShake(4, mine_time)
+    music.play(music.melodyPlayable(music.bigCrash), music.PlaybackMode.InBackground)
+}
 function get_direction () {
     if (controller.up.isPressed()) {
         return me.tilemapLocation().getNeighboringLocation(CollisionDirection.Top)
@@ -88,7 +111,13 @@ function mine (col: number, row: number) {
     if (metal_tiles.indexOf(tiles.tileImageAtLocation(location)) >= 0) {
         metal = Dictionary.get_value(tile_names, tiles.tileImageAtLocation(location))
         pause_time = Dictionary.get_value(mine_time, metal)
+        if (Dictionary.get_value(level_requirements, metal) > mining_level) {
+            me.sayText("I can't mine this yet", 3000, false)
+            controller.moveSprite(me)
+            return
+        }
     }
+    destroy_block(location.column, location.row, 1)
     make_timer_bar(pause_time)
     if (metal_tiles.indexOf(tiles.tileImageAtLocation(location)) >= 0) {
         drop_ore(location.column, location.row)
@@ -129,6 +158,13 @@ function setup_dictionaries () {
     15000
     ])
     costs = Dictionary.create(["Bag capacity: ", "Dynamite: "], [5000, 3000])
+    level_requirements = Dictionary.create(metals, [
+    1,
+    2,
+    5,
+    10,
+    15
+    ])
 }
 function buy (selection: string, selection_index: number) {
     sprites.destroyAllSpritesOfKind(SpriteKind.MiniMenu)
@@ -139,7 +175,7 @@ function buy (selection: string, selection_index: number) {
             info.changeScoreBy(cost * -1)
             capacity = Math.round(capacity * 1.33)
             me.say("Yay, I got it!", 3000)
-            Dictionary.replaceValue(costs, Dictionary.get_keys_list(costs)[0], cost * 2)
+            Dictionary.replaceValue(costs, Dictionary.get_values_list(costs)[0], cost * 2)
             set_capacity_display()
         } else {
             me.say("I don't have enough money", 3000)
@@ -154,6 +190,14 @@ function buy (selection: string, selection_index: number) {
             me.say("I don't have enough money", 3000)
         }
     }
+}
+function sell_effect (cost: number) {
+    music.play(music.melodyPlayable(music.baDing), music.PlaybackMode.InBackground)
+    cost_text = textsprite.create(convertToText(cost))
+    cost_text.setOutline(1, 15)
+    tiles.placeOnRandomTile(cost_text, myTiles.tile4)
+    cost_text.vy = -50
+    cost_text.lifespan = 750
 }
 function generate_cave () {
     for (let tile of tiles.getTilesByType(myTiles.tile10)) {
@@ -181,6 +225,7 @@ function setup () {
     capacity = 10
     rock_mine_time = 300
     dynamite_count = 0
+    mining_level = 0
 }
 function make_sprites () {
     me = sprites.create(assets.image`me`, SpriteKind.Player)
@@ -195,13 +240,30 @@ sprites.onOverlap(SpriteKind.Player, SpriteKind.Food, function (sprite, otherSpr
     } else {
         bag.push(sprites.readDataString(otherSprite, "metal"))
         set_capacity_display()
+        xp_bar.value += Dictionary.get_value(metal_value, sprites.readDataString(otherSprite, "metal"))
+        if (xp_bar.value >= xp_bar.max) {
+            level_up()
+            reduce_mining_time()
+            music.play(music.melodyPlayable(music.powerUp), music.PlaybackMode.InBackground)
+            effects.confetti.startScreenEffect(3000)
+        }
         sprites.destroy(otherSprite)
     }
 })
+function setup_xp_bar () {
+    xp_bar = statusbars.create(160, 8, StatusBarKind.Health)
+    xp_bar.setFlag(SpriteFlag.RelativeToCamera, true)
+    xp_bar.bottom = 120
+    background = sprites.create(image.create(160, 8), SpriteKind.StatusBar)
+    background.image.fill(1)
+    background.setFlag(SpriteFlag.RelativeToCamera, true)
+    background.bottom = 120
+}
 scene.onOverlapTile(SpriteKind.Player, myTiles.tile4, function (me, location) {
     timer.background(function () {
         for (let item of bag) {
             info.changeScoreBy(Dictionary.get_value(metal_value, item))
+            sell_effect(Dictionary.get_value(metal_value, item))
             bag.removeAt(bag.indexOf(item))
             set_capacity_display()
             pause(500)
@@ -213,6 +275,38 @@ scene.onOverlapTile(SpriteKind.Player, myTiles.tile12, function (me, exit) {
     tiles.placeOnRandomTile(me, myTiles.tile11)
     me.y += 16
 })
+function setup_animations () {
+    characterAnimations.loopFrames(
+    me,
+    assets.animation`down`,
+    100,
+    characterAnimations.rule(Predicate.MovingDown)
+    )
+    characterAnimations.loopFrames(
+    me,
+    assets.animation`up`,
+    100,
+    characterAnimations.rule(Predicate.MovingUp)
+    )
+    characterAnimations.loopFrames(
+    me,
+    assets.animation`left`,
+    100,
+    characterAnimations.rule(Predicate.MovingLeft)
+    )
+    characterAnimations.loopFrames(
+    me,
+    assets.animation`right`,
+    100,
+    characterAnimations.rule(Predicate.MovingRight)
+    )
+    characterAnimations.loopFrames(
+    me,
+    [assets.image`me`],
+    100,
+    characterAnimations.rule(Predicate.NotMoving)
+    )
+}
 function drop_ore (col: number, row: number) {
     location = tiles.getTileLocation(col, row)
     tile = tiles.tileImageAtLocation(location)
@@ -224,10 +318,12 @@ function drop_ore (col: number, row: number) {
 }
 let ore: Sprite = null
 let tile: Image = null
+let background: Sprite = null
+let cost_text: TextSprite = null
 let cost: any = null
 let metal_value: Dictionary.Dictionary = null
 let metals: string[] = []
-let mine_time: Dictionary.Dictionary = null
+let level_requirements: Dictionary.Dictionary = null
 let tile_names: Dictionary.Dictionary = null
 let metal = 0
 let rock_mine_time = 0
@@ -236,18 +332,26 @@ let menu: miniMenu.MenuSprite = null
 let value = 0
 let costs: Dictionary.Dictionary = null
 let shop: miniMenu.MenuItem[] = []
+let block: Sprite = null
 let capacity = 0
 let bag: string[] = []
 let capacity_display: TextSprite = null
+let new_time = 0
+let mine_time: Dictionary.Dictionary = null
 let explosion: Sprite = null
 let location: tiles.Location = null
 let metal_tiles: Image[] = []
 let is_metal = false
 let dynamite: Sprite = null
 let dynamite_count = 0
+let xp_bar: StatusBarSprite = null
+let mining_level = 0
 let me: Sprite = null
 let bar: StatusBarSprite = null
 make_sprites()
 setup()
 setup_dictionaries()
 set_capacity_display()
+setup_xp_bar()
+level_up()
+setup_animations()
